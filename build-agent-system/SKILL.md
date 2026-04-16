@@ -1,13 +1,13 @@
 ---
 name: "build-agent-system"
-description: "Guide for designing and building AI agent systems using Codex SDK or Claude Agent SDK. Use this skill whenever the user mentions building agents, multi-agent orchestration, agent workflows, coding agent systems, or wants to create automated pipelines with either OpenAI Codex or Anthropic Claude Agent SDK — even if they don't explicitly say 'agent system'."
+description: "Guide for designing and building AI agent systems. TRIGGER broadly: whenever the user is doing any agent-related development — building, debugging, refactoring, or discussing agents, agentic architectures, tool-use patterns, multi-agent orchestration, agent workflows, autonomous pipelines, LLM-driven automation, or coding agent systems. Covers Codex SDK, Claude Agent SDK, and general agent design patterns. Activate even if the user doesn't explicitly say 'agent' — infer from context (e.g., tool-calling loops, planning/execution patterns, autonomous task decomposition)."
 ---
 
 # Build Agent System
 
 This skill covers the complete methodology for building Agent Systems using **Codex SDK** or **Claude Agent SDK**.
 
-For specific SDK API usage, refer to the corresponding reference docs:
+For specific SDK usage, refer to the corresponding reference docs:
 - **Codex SDK** (OpenAI): see `references/codex-sdk.md`
 - **Claude Agent SDK** (Anthropic): see `references/claude-agent-sdk.md`
 

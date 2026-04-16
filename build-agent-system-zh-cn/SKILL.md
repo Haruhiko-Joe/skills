@@ -1,6 +1,6 @@
 ---
 name: "build-agent-system-zh-cn"
-description: "Guide for designing and building AI agent systems using Codex SDK or Claude Agent SDK. Use this skill whenever the user mentions building agents, multi-agent orchestration, agent workflows, coding agent systems, or wants to create automated pipelines with either OpenAI Codex or Anthropic Claude Agent SDK — even if they don't explicitly say 'agent system'."
+description: "AI Agent 系统设计与构建指南。广泛触发：只要用户在进行任何 Agent 相关的开发工作——构建、调试、重构或讨论 Agent、Agentic 架构、工具调用模式、多 Agent 编排、Agent 工作流、自主流水线、LLM 驱动的自动化、编码 Agent 系统，均应激活。覆盖 Codex SDK、Claude Agent SDK 及通用 Agent 设计模式。即使用户未明确说'Agent'，也应从上下文推断并激活（如工具调用循环、规划/执行模式、自主任务分解）。"
 ---
 
 # Build Agent System

@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# Node (if any scripts use it)
+node_modules/
+package-lock.json
+
+# Python (if any scripts use it)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs & temp
+*.log
+tmp/

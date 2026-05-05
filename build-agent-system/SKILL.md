@@ -33,9 +33,9 @@ Regardless of the SDK, defining an Agent requires configuring three things:
 
 | Element | Description | Codex SDK | Claude Agent SDK |
 |---------|-------------|-----------|-----------------|
-| **System Instruction** | Prompt defining the role, responsibilities, and task workflow | `developer_instructions` | `systemPrompt` |
+| **System Instruction** | Prompt defining the role, responsibilities, and task workflow | `developer_instructions` (TS/Python) | `systemPrompt` (TS) / `system_prompt` (Python) |
 | **Output Schema** | Structured output format, guaranteed to parse at the SDK level | `outputSchema` (JSON Schema) | `outputFormat` (JSON Schema / Zod / Pydantic) |
-| **Profile / Config** | Runtime parameters such as model, permissions, and sandbox | `~/.codex/config.toml` profile | `options` object |
+| **Profile / Config** | Runtime parameters such as model, permissions, and sandbox | `~/.codex/config.toml` profile + code config | `options` object |
 
 ### Agent Class Design Principles
 
@@ -237,6 +237,34 @@ Execution loop: Orchestrator decides → Execute the selected Agent → Feed res
 
 **Note**: Claude Agent SDK has a built-in subagent mechanism that allows you to define sub-Agents directly through the `agents` configuration, and Claude will decide when to invoke them on its own. See the Subagents section in `references/claude-agent-sdk.md`.
 
+#### 3. Background Subagents (Claude Agent SDK)
+
+Define an agent with `background: true` in the AgentDefinition and it executes concurrently with the main agent, notifying via the `TaskCompleted` hook when done:
+
+```
+[Main Agent] ──────────────────────────────→ continues working
+      │
+      └── spawn ──→ [Background Agent] ──→ TaskCompleted notification
+```
+
+Useful for:
+- A monitoring agent that watches for errors while the main agent works
+- A research agent that gathers information in parallel
+- Running long tasks without blocking the main flow
+
+#### 4. Thread Forking (Codex SDK)
+
+`thread_fork()` enables speculative execution — try multiple approaches from the same state, then pick the best:
+
+```
+[Thread A] ─── fork ──┬→ [Thread B: approach 1] → result 1
+                       └→ [Thread C: approach 2] → result 2
+                              ↓
+                       [Pick best] → final result
+```
+
+Combined with `Promise.all` / `asyncio.gather`, this enables safe parallel exploration without contaminating the original thread.
+
 ### Orchestration Pattern Selection Guide
 
 | Scenario | Recommended Pattern | Reason |
@@ -245,7 +273,9 @@ Execution loop: Orchestrator decides → Execute the selected Agent → Feed res
 | Many similar subtasks | Fan-out | Maximizes concurrency, reduces total time |
 | Quality assurance needed | Loop with Checker | Checker provides automated feedback, reduces manual intervention |
 | Dynamic workflow, real-time decisions needed | LLM Orchestration | Orchestrator can flexibly adjust strategy based on intermediate results |
-| Complex systems | Combination | e.g., LLM orchestration + local loop checking |
+| Long task + non-blocking side work | Background Subagents | Main agent continues while background agents handle secondary tasks |
+| Need to explore multiple solutions | Thread Forking | Try approaches in parallel without contaminating the base state |
+| Complex systems | Combination | e.g., LLM orchestration + local loop checking + background agents |
 
 ---
 
@@ -291,10 +321,12 @@ Agent calls can fail due to rate limits, network issues, or malformed output. De
 
 Multi-agent systems multiply API costs. Keep this under control:
 
-- Use the cheapest model that meets quality requirements per Agent. Not every Agent needs `opus` — Checkers and simple classifiers often work fine on `haiku` or `sonnet`.
+- Use the cheapest model that meets quality requirements per Agent. Not every Agent needs `opus` — Checkers and simple classifiers often work fine on `haiku` or `sonnet` (Claude) or standard-tier `gpt-5.5` (OpenAI).
 - Set `maxTurns` to prevent runaway loops. A reasonable default is 10–30 for most tasks.
+- Use `maxBudgetUsd` (Claude Agent SDK) to set hard cost caps per query — the agent stops at the limit rather than burning budget indefinitely.
 - Track cumulative cost via `total_cost_usd` (Claude Agent SDK) or token counts. Log per-Agent costs to identify the most expensive step.
 - For fan-out patterns, estimate total cost as `cost_per_worker × number_of_workers` before scaling up.
+- Codex Python SDK's `retry_on_overload()` handles rate limits with backoff automatically — no custom retry logic needed.
 
 ### Debugging and Observability
 
@@ -307,26 +339,38 @@ Multi-agent systems multiply API costs. Keep this under control:
 
 ## SDK Selection Guide
 
+Both SDKs are fully-featured agent development platforms with comparable capabilities. The choice depends on your model preference and ecosystem fit.
+
 | Dimension | Codex SDK (OpenAI) | Claude Agent SDK (Anthropic) |
 |-----------|-------------------|---------------------------|
-| **Language Support** | TypeScript | TypeScript + Python |
+| **Language Support** | TypeScript + Python | TypeScript + Python |
 | **Execution Model** | Thread/Turn model | Session/Query model |
-| **Configuration** | TOML profile file | In-code options object |
-| **Sub-Agents** | Manual orchestration required | Built-in subagent mechanism |
-| **Tool System** | Sandboxed file operations | Rich built-in tools + MCP protocol |
-| **Permission Control** | `approval_policy` | `permissionMode` + hooks |
-| **Structured Output** | `outputSchema` | `outputFormat` (supports Zod/Pydantic) |
+| **Configuration** | TOML profile + code config + env overrides | In-code options object + `.claude/` config files |
+| **Sub-Agents** | Manual orchestration (full control) | Built-in subagent mechanism (Claude auto-dispatches) |
+| **Tool System** | Rich built-in tools + sandbox + plugins | Rich built-in tools + MCP protocol + plugins |
+| **Permission Control** | `approval_policy` + sandbox modes | `permissionMode` + hooks + `"auto"` classifier |
+| **Structured Output** | `outputSchema` (JSON Schema) | `outputFormat` (JSON Schema / Zod / Pydantic) |
+| **Mid-execution Control** | `TurnHandle` with steer/interrupt/stream | Query object with interrupt/rewindFiles/setModel |
+| **Background / Long-running** | Goal persistence (create/pause/resume/clear) | Background subagents via `background: true` |
+| **Session Branching** | `thread_fork()` | `forkSession` |
 
 ## Model Selection Guide
 
 | Dimension | Claude (Anthropic) | OpenAI |
 |-----------|-------------------|--------|
-| **Text Work** | Excels — output is natural, fluent, and doesn't feel AI-generated | Average |
-| **Frontend Development** | Strong design aesthetics, high-quality generated UI code | Average |
-| **Hard Math / Algorithms** | Average | Excels — can AC Codeforces 3000+ extremely hard algorithm problems |
+| **Top Models** | Opus 4.6 / Sonnet 4.6 / Haiku | GPT-5.5 / GPT-5.4 |
+| **Text & Writing** | Opus 4.6 is natural and fluent; Opus 4.7 has noticeable AI tone | GPT-5.5 excels — natural prose, SOTA writing quality |
+| **Frontend Development** | Strong design aesthetics, high-quality UI code | Strong |
+| **Math & Algorithms** | Strong | GPT-5.5 is SOTA — top scores on competition math and algorithms |
+| **Code** | Strong | GPT-5.5 is SOTA across coding benchmarks |
+| **Long-running Agents** | Background agents, auto-compaction, file checkpointing | Goal persistence, turn-level steer/interrupt |
+| **Cost Tiers** | Opus (premium) / Sonnet (balanced) / Haiku (budget) | GPT-5.5 (premium) / fast tier / default tier |
 
 Selection advice:
-- For copywriting, documentation, frontend pages, and other text/design-oriented tasks, prefer Claude
-- For competition-level algorithm problems and complex mathematical reasoning, prefer OpenAI
+- GPT-5.5 is currently the most capable frontier model overall (writing, code, math) — prefer it when raw capability matters most
+- Claude Opus 4.6 has a distinct writing voice that's natural and low-AI-tone; prefer it for tasks where prose style matters. Opus 4.7 is more capable but writes with heavier AI tone
+- Opus 4.7 requires Claude Agent SDK v0.2.111+
+- For budget-sensitive fan-out, use Sonnet 4.6 (Claude) or standard-tier GPT-5.5 (OpenAI)
+- Both SDKs support mixing models per Agent — use premium models for critical thinking, budget models for simple tasks
 
 After choosing an SDK based on your project needs, refer to the corresponding reference docs for specific API usage.

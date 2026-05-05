@@ -33,9 +33,9 @@ SDK 具体的 API 调用方式请查阅对应参考文档：
 
 | 要素 | 说明 | Codex SDK | Claude Agent SDK |
 |------|------|-----------|-----------------|
-| **System Instruction** | 定义角色、职责和任务 workflow 的提示词 | `developer_instructions` | `systemPrompt` |
+| **System Instruction** | 定义角色、职责和任务 workflow 的提示词 | `developer_instructions`（TS/Python） | `systemPrompt`（TS）/ `system_prompt`（Python） |
 | **Output Schema** | 结构化输出格式，SDK 层面保证解析成功 | `outputSchema` (JSON Schema) | `outputFormat` (JSON Schema / Zod / Pydantic) |
-| **Profile / Config** | 模型、权限、沙箱等运行参数 | `~/.codex/config.toml` profile | `options` 对象 |
+| **Profile / Config** | 模型、权限、沙箱等运行参数 | `~/.codex/config.toml` profile + 代码配置 | `options` 对象 |
 
 ### Agent Class 设计原则
 
@@ -237,6 +237,34 @@ interface OrchestratorDecision {
 
 **注意**：Claude Agent SDK 内置了 subagent 机制，可以直接通过 `agents` 配置定义子 Agent，由 Claude 自行决定何时调用。详见 `references/claude-agent-sdk.md` 的 Subagents 章节。
 
+#### 3. 后台子 Agent（Claude Agent SDK）
+
+在 AgentDefinition 中设置 `background: true`，子 Agent 将与主 Agent 并发执行，完成后通过 `TaskCompleted` hook 通知：
+
+```
+[主 Agent] ──────────────────────────────→ 继续工作
+      │
+      └── 启动 ──→ [后台 Agent] ──→ TaskCompleted 通知
+```
+
+适用于：
+- 主 Agent 工作时，后台 Agent 监控错误
+- 并行收集研究信息
+- 不阻塞主流程的长时间任务
+
+#### 4. Thread 分叉（Codex SDK）
+
+`thread_fork()` 实现推测性执行——从同一状态尝试多种方案，选择最优结果：
+
+```
+[Thread A] ─── fork ──┬→ [Thread B: 方案 1] → result 1
+                       └→ [Thread C: 方案 2] → result 2
+                              ↓
+                       [选择最优] → 最终结果
+```
+
+结合 `Promise.all` / `asyncio.gather`，可安全地并行探索而不污染原始 thread。
+
 ### 编排模式选择指南
 
 | 场景 | 推荐模式 | 原因 |
@@ -245,7 +273,9 @@ interface OrchestratorDecision {
 | 大量同类子任务 | 并行扇出 | 充分利用并发，缩短总耗时 |
 | 需要质量保证 | 循环校验 | Checker 提供自动化反馈，减少人工介入 |
 | 流程动态、需临场判断 | LLM 编排 | Orchestrator 可根据中间结果灵活调整策略 |
-| 复杂系统 | 组合使用 | 例如 LLM 编排 + 局部循环校验 |
+| 长任务 + 非阻塞辅助工作 | 后台子 Agent | 主 Agent 继续工作，后台 Agent 处理次要任务 |
+| 需探索多种方案 | Thread 分叉 | 并行尝试不同方案，不污染基础状态 |
+| 复杂系统 | 组合使用 | 例如 LLM 编排 + 局部循环校验 + 后台 Agent |
 
 ---
 
@@ -275,28 +305,70 @@ my-agent-system/
 └── tsconfig.json
 ```
 
+## 实用建议
+
+### 错误处理与重试
+
+Agent 调用可能因速率限制、网络问题或输出格式错误而失败：
+
+- 每次 Agent 调用都包在 try/catch 中。遇到瞬时错误（速率限制、超时），使用指数退避重试。
+- 循环校验模式下通过 `maxRetries` 限制重试次数。Checker 连续拒绝 3 次后应升级处理，而非无限循环。
+- 重试时使用 `continue` 而非 `run`——会话保留了失败的上下文，Agent 知道哪里出了问题。全新 `run` 会丢失这些历史。
+
+### 费用与 Token 管理
+
+多 Agent 系统会放大 API 费用，需要注意控制：
+
+- 按 Agent 使用满足质量要求的最便宜模型。不是每个 Agent 都需要 `opus`——Checker 和简单分类器用 `haiku` 或 `sonnet`（Claude）或标准层级 `gpt-5.5`（OpenAI）即可。
+- 设置 `maxTurns` 防止失控循环，大多数任务 10–30 次是合理的默认值。
+- 使用 `maxBudgetUsd`（Claude Agent SDK）设置硬性费用上限——达到限制后 Agent 自动停止，而非无限烧预算。
+- 通过 `total_cost_usd`（Claude Agent SDK）或 token 计数追踪累积费用。记录每个 Agent 的费用，找出最贵的环节。
+- 扇出模式下，扩大规模前先估算总费用：`单个 worker 费用 × worker 数量`。
+- Codex Python SDK 的 `retry_on_overload()` 自动处理速率限制和退避，无需自定义重试逻辑。
+
+### 调试与可观测性
+
+- 记录每次 Agent 调用的 prompt（截断）、session/thread ID、模型、耗时和费用。
+- Agent 产出意外结果时，检查 transcript（完整消息流）而非靠猜。中间的工具调用和推理能揭示问题所在。
+- 多 Agent 系统中，为每个 Agent 的日志添加名称前缀（如 `[Analyzer]`、`[Checker]`），方便追踪流程。
+- 开发阶段使用 `maxTurns: 1` 或 `permissionMode: "plan"` 预览 Agent 行为，避免执行副作用。
+
+---
+
 ## SDK 选择指南
+
+两个 SDK 都是功能完整的 Agent 开发平台，能力相当。选择取决于模型偏好和生态系统契合度。
 
 | 维度 | Codex SDK (OpenAI) | Claude Agent SDK (Anthropic) |
 |------|-------------------|---------------------------|
-| **语言支持** | TypeScript | TypeScript + Python |
+| **语言支持** | TypeScript + Python | TypeScript + Python |
 | **运行模型** | Thread/Turn 模型 | Session/Query 模型 |
-| **配置方式** | TOML profile 文件 | 代码内 options 对象 |
-| **子 Agent** | 需手动编排 | 内置 subagent 机制 |
-| **工具系统** | 沙箱内文件操作 | 丰富的内置工具 + MCP 协议 |
-| **权限控制** | `approval_policy` | `permissionMode` + hooks |
-| **结构化输出** | `outputSchema` | `outputFormat` (支持 Zod/Pydantic) |
+| **配置方式** | TOML profile + 代码配置 + 环境变量覆盖 | 代码内 options 对象 + `.claude/` 配置文件 |
+| **子 Agent** | 手动编排（完全可控） | 内置 subagent 机制（Claude 自动调度） |
+| **工具系统** | 丰富的内置工具 + 沙箱 + 插件 | 丰富的内置工具 + MCP 协议 + 插件 |
+| **权限控制** | `approval_policy` + 沙箱模式 | `permissionMode` + hooks + `"auto"` 分类器 |
+| **结构化输出** | `outputSchema` (JSON Schema) | `outputFormat` (JSON Schema / Zod / Pydantic) |
+| **执行中途控制** | `TurnHandle` 支持 steer/interrupt/stream | Query 对象支持 interrupt/rewindFiles/setModel |
+| **后台 / 长任务** | 目标持久化（create/pause/resume/clear） | 后台子 Agent，通过 `background: true` 启用 |
+| **会话分支** | `thread_fork()` | `forkSession` |
 
 ## 模型选择指南
 
 | 维度 | Claude (Anthropic) | OpenAI |
 |------|-------------------|--------|
-| **文字工作** | 擅长，输出自然流畅，没有浓重的 AI 感 | 一般 |
-| **前端开发** | 设计风格好，生成的 UI 代码质量高 | 一般 |
-| **高难度数学 / 算法** | 一般 | 擅长，能 AC Codeforces 3000+ 的极难算法题和奥赛等级的数学题 |
+| **顶级模型** | Opus 4.6 / 4.7 | GPT-5.5 / GPT-5.4 |
+| **文字与写作** | Opus 4.6 自然流畅；Opus 4.7 AI 味明显偏重 | GPT-5.5 SOTA——文风自然，写作质量优秀 |
+| **前端开发** | 设计美感好，生成的 UI 代码质量高 | 强 |
+| **数学与算法** | 强 | GPT-5.5 SOTA——竞赛数学和算法题顶尖水平 |
+| **代码** | 强 | GPT-5.5 在各项代码 benchmark 中 SOTA |
+| **长时间 Agent 任务** | 后台 Agent、自动压缩、文件检查点 | 目标持久化、Turn 级别 steer/interrupt |
+| **费用层级** | Opus（高端）/ Sonnet（均衡）/ Haiku（经济） | GPT-5.5（高端）/ fast tier / default tier |
 
 选择建议：
-- 文案生成、文档撰写、前端页面等偏文字和设计的任务，优先使用 Claude
-- 竞赛级算法题、复杂数学推理等硬核计算任务，优先使用 OpenAI
+- GPT-5.5 是当前综合能力最强的前沿模型（写作、代码、数学）——追求极致能力时优先选择
+- Claude Opus 4.6 文风独特自然、AI 感轻，适合对行文风格有要求的任务。Opus 4.7 能力更强但 AI 味偏重
+- Opus 4.7 需要 Claude Agent SDK v0.2.111+
+- 预算敏感的扇出场景，使用 Sonnet 4.6（Claude）或标准层级 GPT-5.5（OpenAI）
+- 两个 SDK 都支持按 Agent 混用模型——关键思考环节用高端模型，简单任务用经济模型
 
 根据项目需求选择 SDK 后，查阅对应的参考文档获取具体 API 用法。

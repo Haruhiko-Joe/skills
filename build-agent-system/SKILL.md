@@ -1,17 +1,18 @@
 ---
 name: "build-agent-system"
-description: "Guide for designing and building AI agent systems. TRIGGER broadly: whenever the user is doing any agent-related development — building, debugging, refactoring, or discussing agents, agentic architectures, tool-use patterns, multi-agent orchestration, agent workflows, autonomous pipelines, LLM-driven automation, or coding agent systems. Covers Codex SDK, Claude Agent SDK, and general agent design patterns. Activate even if the user doesn't explicitly say 'agent' — infer from context (e.g., tool-calling loops, planning/execution patterns, autonomous task decomposition)."
+description: "Guide for designing and building AI agent systems. TRIGGER broadly: whenever the user is doing any agent-related development — building, debugging, refactoring, or discussing agents, agentic architectures, tool-use patterns, multi-agent orchestration, agent workflows, autonomous pipelines, LLM-driven automation, or coding agent systems. Covers Codex SDK, Claude Agent SDK, Antigravity SDK, and general agent design patterns. Activate even if the user doesn't explicitly say 'agent' — infer from context (e.g., tool-calling loops, planning/execution patterns, autonomous task decomposition)."
 ---
 
 # Build Agent System
 
-This skill covers the complete methodology for building Agent Systems using **Codex SDK** or **Claude Agent SDK**.
+This skill covers the complete methodology for building Agent Systems using **Codex SDK**, **Claude Agent SDK**, or **Antigravity SDK**.
 
 For specific SDK usage, refer to the corresponding reference docs:
 - **Codex SDK** (OpenAI): see `references/codex-sdk.md`
 - **Claude Agent SDK** (Anthropic): see `references/claude-agent-sdk.md`
+- **Antigravity SDK** (Google, Python): see `references/antigravity-sdk.md`
 
-For the latest official documentation, use the `OpenAI Docs` or `Anthropic Docs` skills to fetch up-to-date API references.
+The references may lag behind the SDKs. Before relying on a specific option, check the official docs: the `claude-api` skill or [code.claude.com/docs](https://code.claude.com/docs) for the Claude Agent SDK, the `openai-docs` skill or [learn.chatgpt.com/docs](https://learn.chatgpt.com/docs) for the Codex SDK, and [antigravity.google/docs](https://antigravity.google/docs) or the [antigravity-sdk-python](https://github.com/google-antigravity/antigravity-sdk-python) repo for the Antigravity SDK.
 
 ---
 
@@ -31,11 +32,11 @@ Complex Agent Systems are composed of multiple orchestrated Agents, each respons
 
 Regardless of the SDK, defining an Agent requires configuring three things:
 
-| Element | Description | Codex SDK | Claude Agent SDK |
-|---------|-------------|-----------|-----------------|
-| **System Instruction** | Prompt defining the role, responsibilities, and task workflow | `developer_instructions` (TS/Python) | `systemPrompt` (TS) / `system_prompt` (Python) |
-| **Output Schema** | Structured output format, guaranteed to parse at the SDK level | `outputSchema` (JSON Schema) | `outputFormat` (JSON Schema / Zod / Pydantic) |
-| **Profile / Config** | Runtime parameters such as model, permissions, and sandbox | `~/.codex/config.toml` profile + code config | `options` object |
+| Element | Description | Codex SDK | Claude Agent SDK | Antigravity SDK |
+|---------|-------------|-----------|------------------|-----------------|
+| **System Instruction** | Prompt defining the role, responsibilities, and task workflow | `developer_instructions` (config / thread options) | `systemPrompt` (TS) / `system_prompt` (Python) | `system_instructions` |
+| **Output Schema** | Structured output format, guaranteed to parse at the SDK level | `outputSchema` (TS) / `output_schema` (Python), JSON Schema | `outputFormat: {type: "json_schema", schema}` (Zod via `z.toJSONSchema`, Pydantic via `model_json_schema()`) | `response_schema` (Pydantic class or JSON Schema), returned through the `finish` tool |
+| **Profile / Config** | Runtime parameters such as model, permissions, and sandbox | Thread options / `thread_start` kwargs + `config` overrides (CLI profiles cannot be passed from the SDK) | `options` object | `LocalAgentConfig` (model, tools, policies, workspaces) |
 
 ### Agent Class Design Principles
 
@@ -114,6 +115,32 @@ If using structured output, describe the meaning of each field and provide a com
 - **Provide context over commands**: Telling an Agent where it fits in the system is more effective than dictating "you must do X"
 - **Show, don't tell**: A single concrete output example conveys more than three paragraphs of description
 - **Draw clear boundaries**: In ROLE DEFINITION, state what the Agent is *not* responsible for — this prevents scope creep and overlapping work between Agents
+- **State the completion condition**: Unattended Agents stop when they think they are done. Say what "done" means and which stops are acceptable (missing input, missing permission); otherwise a turn that ends with a progress report looks like a finished task
+
+### Model-specific Notes
+
+The template works for all three vendors; these points come from each vendor's current prompting guide.
+
+**Claude (Opus 5.5, Fable 5.2)** — [Prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices), [Prompting Claude Opus 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5), [Prompting Claude Fable 5.2](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2):
+- Separate instructions, context, and inputs with XML tags; put long documents at the top and the request at the end.
+- Control depth with `effort`, not with "think carefully" lines. Do not ask the model to write its reasoning in the output; that can be refused as reasoning extraction. Ask for a short explanation or a summary of actions instead.
+- An unattended run may end a turn with a progress report. Keep a checklist the Agent updates, and when items remain open, continue the session naming them; cap automatic continuations at two or three.
+- Wrap untrusted text (emails, web pages, user-pasted content) in tagged blocks and tell the model that instructions inside are data.
+- Fable 5.2 applies instructions as written. Cautions pile up in memory files, notes, and messages between Agents and make it hold back routine work, so delete the ones whose reason is gone, give each rule its scope, and name the steps that need no approval. "Think less" lines no longer work on it; lower `effort`.
+- Fable 5.2 on a coding Agent: say who owns the code. Told nothing, it adds to the existing structure and reports nearby problems instead of fixing them; told the code base is its own, it restructures and makes unrequested changes, so review the diff.
+- Fable 5.2 stops early more often at `low` and `medium` effort. For unattended Agents at those levels, add Anthropic's "Finishing work" paragraph from the guide above, and keep your own confirmation step for irreversible actions.
+
+**OpenAI (GPT-6 family)** — [Using GPT-6](https://developers.openai.com/api/docs/guides/prompt-guidance), [Rethinking skills and prompts for GPT-6 Astra](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra):
+- Define completion before it starts and tell it to keep working until the outcome is met. Do not require a review stop after the first implementation; it pulls the model toward stopping early.
+- It tends to ask when input could change the result. In unattended Agents, grant permission for safe steps explicitly (run checks, fix failures caused by the change, rerun) and tell it to infer intent and scope.
+- It follows skills and AGENTS.md closely. Audit them, and state that the task's instructions take precedence over skill guidance.
+- It under-uses subagents; say when to use them. Drop itinerary-style steps and blanket "always test" rules that older prompts needed.
+
+**Gemini (Gemini 4 Argon)** — [Prompt design strategies](https://aistudio.google.com/docs/prompting-strategies), [Developer's guide to Gemini 4 Argon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon):
+- Put constraints, role, and output format first, then context and documents, then the specific task last ("Based on the information above, ..."). Static content first also helps implicit caching.
+- Use one structure consistently (XML-style tags or Markdown headings). Write plainly; emphatic wording such as "CRITICAL" or capitals does not help.
+- Output is terse by default; ask explicitly for detail. It does not follow numeric length targets, so describe the shape of the output instead. Include a few consistently formatted examples for tone and format.
+- Control depth with the thinking level, not with requests to show reasoning. In agentic prompts, say where it may assume and where it must stop, and that on a non-transient error it should change approach rather than repeat the call.
 
 ### System Prompt Example
 
@@ -235,35 +262,46 @@ interface OrchestratorDecision {
 
 Execution loop: Orchestrator decides → Execute the selected Agent → Feed result back to the Orchestrator → Next decision, until `done=true`.
 
-**Note**: Claude Agent SDK has a built-in subagent mechanism that allows you to define sub-Agents directly through the `agents` configuration, and Claude will decide when to invoke them on its own. See the Subagents section in `references/claude-agent-sdk.md`.
+**Note**: all three SDKs also let the model itself spawn subagents, so an Orchestrator can be the SDK's own agent instead of your loop:
+- Claude Agent SDK: subagents defined in the `agents` option (`AgentDefinition`), dispatched through the `Agent` tool.
+- Codex: built-in multi-agent (`features.multi_agent`, on by default), with custom roles in `.codex/agents/*.toml` and limits under `[agents]`.
+- Antigravity SDK: `SubagentConfig` entries or dynamic self-clones; nesting depth defaults to 1.
+
+See each reference's Subagents section.
 
 #### 3. Background Subagents (Claude Agent SDK)
 
-Define an agent with `background: true` in the AgentDefinition and it executes concurrently with the main agent, notifying via the `TaskCompleted` hook when done:
+Subagents launched through the `Agent` tool run in the background by default (`AgentDefinition.background: true` forces it). The tool returns at once with `status: "async_launched"`, the main agent keeps working, and the report arrives later as a task notification:
 
 ```
 [Main Agent] ──────────────────────────────→ continues working
       │
-      └── spawn ──→ [Background Agent] ──→ TaskCompleted notification
+      └── spawn ──→ [Background Agent] ──→ task_notification → next turn
 ```
 
-Useful for:
-- A monitoring agent that watches for errors while the main agent works
-- A research agent that gathers information in parallel
-- Running long tasks without blocking the main flow
+- In a one-shot `query()`, the final result waits for background subagents. With streaming input, each finished background task starts a new turn whose result carries `origin.kind: "task-notification"`.
+- Lifecycle arrives as `system` messages (`task_started`, `task_progress`, `task_notification`); stop one with `stopTask()` / `stop_task()`.
+- `maxBudgetUsd` covers subagent spend. Nesting depth and concurrency are capped (defaults 3 and 20).
+- For dozens to hundreds of agents, the `Workflow` tool (TS) runs a coordination script outside the conversation context.
 
-#### 4. Thread Forking (Codex SDK)
+Useful for a monitoring agent alongside the main one, parallel research, or long tasks that should not block the main flow.
 
-`thread_fork()` enables speculative execution — try multiple approaches from the same state, then pick the best:
+#### 4. Forking (speculative execution)
+
+Branch from the same state, try several approaches in parallel, then pick the best:
 
 ```
-[Thread A] ─── fork ──┬→ [Thread B: approach 1] → result 1
-                       └→ [Thread C: approach 2] → result 2
-                              ↓
-                       [Pick best] → final result
+[Session A] ─── fork ──┬→ [Session B: approach 1] → result 1
+                        └→ [Session C: approach 2] → result 2
+                               ↓
+                        [Pick best] → final result
 ```
 
-Combined with `Promise.all` / `asyncio.gather`, this enables safe parallel exploration without contaminating the original thread.
+- Claude Agent SDK: `forkSession: true` on resume, or `forkSession()` / `fork_session()`; `resumeSessionAt` forks from a specific message. Inside a session, the `fork` subagent type copies the current conversation.
+- Codex: `thread_fork()` in the Python SDK; the TS SDK has no fork (the CLI has `codex exec fork`).
+- Antigravity SDK: no conversation fork. Workflow agents can work on an isolated copy of the repo (`workspace="branch"`).
+
+Run the branches with `Promise.all` / `asyncio.gather`; the original session stays untouched.
 
 ### Orchestration Pattern Selection Guide
 
@@ -274,7 +312,7 @@ Combined with `Promise.all` / `asyncio.gather`, this enables safe parallel explo
 | Quality assurance needed | Loop with Checker | Checker provides automated feedback, reduces manual intervention |
 | Dynamic workflow, real-time decisions needed | LLM Orchestration | Orchestrator can flexibly adjust strategy based on intermediate results |
 | Long task + non-blocking side work | Background Subagents | Main agent continues while background agents handle secondary tasks |
-| Need to explore multiple solutions | Thread Forking | Try approaches in parallel without contaminating the base state |
+| Need to explore multiple solutions | Forking | Try approaches in parallel without contaminating the base state |
 | Complex systems | Combination | e.g., LLM orchestration + local loop checking + background agents |
 
 ---
@@ -321,56 +359,57 @@ Agent calls can fail due to rate limits, network issues, or malformed output. De
 
 Multi-agent systems multiply API costs. Keep this under control:
 
-- Use the cheapest model that meets quality requirements per Agent. Not every Agent needs `opus` — Checkers and simple classifiers often work fine on `haiku` or `sonnet` (Claude) or standard-tier `gpt-5.5` (OpenAI).
-- Set `maxTurns` to prevent runaway loops. A reasonable default is 10–30 for most tasks.
-- Use `maxBudgetUsd` (Claude Agent SDK) to set hard cost caps per query — the agent stops at the limit rather than burning budget indefinitely.
-- Track cumulative cost via `total_cost_usd` (Claude Agent SDK) or token counts. Log per-Agent costs to identify the most expensive step.
+- Models are fixed per vendor: Claude Opus 5.5 or Fable 5.2, OpenAI `gpt-6-astra`, Google Gemini 4 Argon. Never use Sonnet, Haiku, Gemini Flash, or the other GPT-6 models, not even for checkers or fan-out workers; their quality is not good enough. Cut cost with lower effort instead.
+- Lower effort before switching models: `effort` (Claude), `model_reasoning_effort` (Codex), and the thinking level (Antigravity) control depth and cost.
+- Cap runaway loops: `maxTurns` / `max_turns` and `maxBudgetUsd` (Claude, which also covers subagent spend), `BudgetConfig` limits on model calls, tool calls, and tokens (Antigravity, reported through `stop_reason`). Codex has no turn cap in the SDK; bound it in your own loop.
+- Track cost per Agent: `total_cost_usd` on the Claude result message, token `usage` on Codex turns, token usage on Antigravity responses (no USD). Log per-Agent totals to find the most expensive step.
 - For fan-out patterns, estimate total cost as `cost_per_worker × number_of_workers` before scaling up.
-- Codex Python SDK's `retry_on_overload()` handles rate limits with backoff automatically — no custom retry logic needed.
+- Codex Python SDK's `retry_on_overload()` wraps a call with backoff for overload errors; Antigravity has `RetryConfig`.
 
 ### Debugging and Observability
 
 - Log every Agent invocation with its prompt (truncated), session/thread ID, model, duration, and cost.
 - When an Agent produces unexpected output, check the transcript (the full message stream) rather than guessing. The intermediate tool calls and reasoning reveal where things went wrong.
 - In multi-Agent systems, assign each Agent a name prefix in logs (e.g., `[Analyzer]`, `[Checker]`) so you can trace the flow.
-- During development, run Agents with `maxTurns: 1` or `permissionMode: "plan"` to preview their behavior without executing side effects.
+- During development, preview behavior without side effects: `permissionMode: "plan"` or a low `maxTurns` (Claude), a `read-only` sandbox (Codex), or write tools disabled with the default policies, which deny the shell (Antigravity).
 
 ---
 
 ## SDK Selection Guide
 
-Both SDKs are fully-featured agent development platforms with comparable capabilities. The choice depends on your model preference and ecosystem fit.
+All three are full agent runtimes. The choice depends on the model you want, the language, and which controls you need.
 
-| Dimension | Codex SDK (OpenAI) | Claude Agent SDK (Anthropic) |
-|-----------|-------------------|---------------------------|
-| **Language Support** | TypeScript + Python | TypeScript + Python |
-| **Execution Model** | Thread/Turn model | Session/Query model |
-| **Configuration** | TOML profile + code config + env overrides | In-code options object + `.claude/` config files |
-| **Sub-Agents** | Manual orchestration (full control) | Built-in subagent mechanism (Claude auto-dispatches) |
-| **Tool System** | Rich built-in tools + sandbox + plugins | Rich built-in tools + MCP protocol + plugins |
-| **Permission Control** | `approval_policy` + sandbox modes | `permissionMode` + hooks + `"auto"` classifier |
-| **Structured Output** | `outputSchema` (JSON Schema) | `outputFormat` (JSON Schema / Zod / Pydantic) |
-| **Mid-execution Control** | `TurnHandle` with steer/interrupt/stream | Query object with interrupt/rewindFiles/setModel |
-| **Background / Long-running** | Goal persistence (create/pause/resume/clear) | Background subagents via `background: true` |
-| **Session Branching** | `thread_fork()` | `forkSession` |
+| Dimension | Codex SDK (OpenAI) | Claude Agent SDK (Anthropic) | Antigravity SDK (Google) |
+|-----------|-------------------|------------------------------|--------------------------|
+| **Language** | TypeScript + Python | TypeScript + Python | Python only (alpha) |
+| **Execution Model** | Thread / turn | Session / query | `Agent` + conversation; one bundled local runtime process per `Agent` |
+| **Auth / Billing** | ChatGPT sign-in or API key | Claude sign-in or API key | `GEMINI_API_KEY` or Vertex / Gemini Enterprise; not the Antigravity subscription (for that, call `agy -p`) |
+| **Configuration** | Thread options + `config` overrides of config.toml keys | In-code `options` + `.claude/` settings | `LocalAgentConfig` |
+| **Sub-Agents** | Built-in multi-agent, roles in `.codex/agents/*.toml` | `agents` option; background by default; `fork` subagent; `Workflow` tool (TS) | `SubagentConfig` or self-clones; beta workflows (`agent`, `parallel`, `pipeline`) |
+| **Permission Control** | Sandbox mode + approval policy (Python default: `auto_review` reviewer) | `permissionMode` (6 modes) + `allowedTools` + hooks | Tool visibility (`enabled_tools`) + runtime policies (allow / deny / ask / auto); shell denied by default; optional OS sandbox |
+| **Structured Output** | `outputSchema` / `output_schema` | `outputFormat` (json_schema) | `response_schema` via the `finish` tool |
+| **Mid-execution Control** | Python: `steer()` / `interrupt()`; TS: abort only | `interrupt()`, `setModel()`, `rewindFiles()`, `stopTask()` | `cancel()` only |
+| **Background / Long-running** | Goals exist in the CLI but not in the SDK; many concurrent turns per `AsyncCodex` | Background subagents and task notifications; cross-host resume via `sessionStore` | Triggers and schedules (stop when the process exits); resume from `save_dir` |
+| **Session Branching** | Python `thread_fork()` | `forkSession` / `forkSession()` / `resumeSessionAt` | None (workflow agents can use a repo branch) |
 
 ## Model Selection Guide
 
-| Dimension | Claude (Anthropic) | OpenAI |
-|-----------|-------------------|--------|
-| **Top Models** | Opus 4.6 / Sonnet 4.6 / Haiku | GPT-5.5 / GPT-5.4 |
-| **Text & Writing** | Opus 4.6 is natural and fluent; Opus 4.7 has noticeable AI tone | GPT-5.5 excels — natural prose, SOTA writing quality |
-| **Frontend Development** | Strong design aesthetics, high-quality UI code | Strong |
-| **Math & Algorithms** | Strong | GPT-5.5 is SOTA — top scores on competition math and algorithms |
-| **Code** | Strong | GPT-5.5 is SOTA across coding benchmarks |
-| **Long-running Agents** | Background agents, auto-compaction, file checkpointing | Goal persistence, turn-level steer/interrupt |
-| **Cost Tiers** | Opus (premium) / Sonnet (balanced) / Haiku (budget) | GPT-5.5 (premium) / fast tier / default tier |
+| Dimension | Claude (Anthropic) | OpenAI | Google |
+|-----------|-------------------|--------|--------|
+| **Models to use** | Opus 5.5 (`claude-opus-5-5`) or Fable 5.2 (`claude-fable-5-2`) only | `gpt-6-astra` only | Gemini 4 Argon only |
+| **Depth control** | `effort` (`low`–`max`), thinking always on. API default is `medium` on Opus 5.5 and `high` on Fable 5.2, so set it explicitly | `model_reasoning_effort` (`low`–`ultra`) | Thinking level |
+| **Cost control** | Lower `effort`; Opus 5.5 as the default, Fable 5.2 for the hardest reasoning, planning, and long unattended runs | Lower effort | Lower thinking level |
 
-Selection advice:
-- GPT-5.5 is currently the most capable frontier model overall (writing, code, math) — prefer it when raw capability matters most
-- Claude Opus 4.6 has a distinct writing voice that's natural and low-AI-tone; prefer it for tasks where prose style matters. Opus 4.7 is more capable but writes with heavier AI tone
-- Opus 4.7 requires Claude Agent SDK v0.2.111+
-- For budget-sensitive fan-out, use Sonnet 4.6 (Claude) or standard-tier GPT-5.5 (OpenAI)
-- Both SDKs support mixing models per Agent — use premium models for critical thinking, budget models for simple tasks
+Assign each Agent in the system to the model that fits its role:
 
-After choosing an SDK based on your project needs, refer to the corresponding reference docs for specific API usage.
+| Agent role | Model | Why |
+|---|---|---|
+| Solves math or algorithm problems, writes proofs or complexity-critical code from a complete specification | `gpt-6-astra` (Codex SDK) | Rigorous, careful solutions when the problem is fully defined. Have an upstream Agent (or your code) produce the full statement first: inputs, constraints, objective, edge cases, what must be proved |
+| Writes prose people will read: docs, reports, copy, Chinese text; rewrites and translates | Gemini 4 Argon (Antigravity SDK) | Natural, human-sounding writing |
+| Implements and debugs in a real repository, reviews code, runs long unattended, or handles loosely specified work that needs judgment; reads charts and screenshots; builds frontend UI | Claude Opus 5.5 (Claude Agent SDK) | Strong at end-to-end agentic coding and review in large codebases, catches details that don't add up, reports plainly what it did and what remains |
+| Orchestrator / Checker | Claude Fable 5.2 or Opus 5.5, or the allowed model of the SDK you use | Judgment over other Agents' output; a Checker should not be weaker than the Agent it checks. Anthropic reports good results with Fable 5.2 as planner and orchestrator for other models |
+| High-volume, mechanical workers | The same models at low effort | Smaller models are not used; lowering effort is the cost lever |
+
+Never assign an Agent, a subagent, or a Checker to any other model: not Claude Sonnet or Haiku, not Gemini Flash (the Antigravity SDK default, so always set `model` explicitly), and not the other GPT-6 models (`gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`). Pin subagent models too: `agents.default_subagent_model` (Codex), the `model` field of each `AgentDefinition` (Claude), `SubagentConfig.model` (Antigravity). All three SDKs set the model per Agent, so one system can mix vendors, for example Astra for the algorithm core, Claude for integration and review, Argon for the documentation.
+
+After choosing an SDK, refer to the corresponding reference doc for specific API usage.

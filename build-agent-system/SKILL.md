@@ -136,11 +136,12 @@ The template works for all three vendors; these points come from each vendor's c
 - It follows skills and AGENTS.md closely. Audit them, and state that the task's instructions take precedence over skill guidance.
 - It under-uses subagents; say when to use them. Drop itinerary-style steps and blanket "always test" rules that older prompts needed.
 
-**Gemini (Gemini 4 Argon)** — [Prompt design strategies](https://aistudio.google.com/docs/prompting-strategies), [Developer's guide to Gemini 4 Argon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon):
-- Put constraints, role, and output format first, then context and documents, then the specific task last ("Based on the information above, ..."). Static content first also helps implicit caching.
+**Gemini (Gemini 4 Carbon)** — [What's new in Gemini 4 Carbon](https://aistudio.google.com/docs/whats-new-gemini-4-carbon), [Developer's guide to Gemini 4 Carbon](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-carbon), [Prompt design strategies](https://aistudio.google.com/docs/prompting-strategies):
+- Put constraints, role, and output format first, then context and documents, then the specific task last ("Based on the information above, ..."). Shared static prefixes of 4,096 tokens or more get automatic implicit caching; explicit context caching is not supported on Carbon.
+- Lock down the objective, scope, and acceptance criteria before a long run: Carbon runs extended exploration and verification loops on its own, so a small ambiguity at the start can send a long run in the wrong direction. Give it concrete ways to verify its work (tests, scripts, checks) rather than inspection alone.
 - Use one structure consistently (XML-style tags or Markdown headings). Write plainly; emphatic wording such as "CRITICAL" or capitals does not help.
 - Output is terse by default; ask explicitly for detail. It does not follow numeric length targets, so describe the shape of the output instead. Include a few consistently formatted examples for tone and format.
-- Control depth with the thinking level, not with requests to show reasoning. In agentic prompts, say where it may assume and where it must stop, and that on a non-transient error it should change approach rather than repeat the call.
+- Control depth with `thinking_level` (`low`, `medium` default, `high`), not with requests to show reasoning, and keep `max_output_tokens` and client timeouts generous because Carbon spends more thinking tokens per turn than Argon did. Remove `temperature`, `top_p`, and `top_k` (ignored on Carbon). In agentic prompts, say where it may assume and where it must stop, and that on a non-transient error it should change approach rather than repeat the call.
 
 ### System Prompt Example
 
@@ -359,7 +360,7 @@ Agent calls can fail due to rate limits, network issues, or malformed output. De
 
 Multi-agent systems multiply API costs. Keep this under control:
 
-- Models are fixed per vendor: Claude Opus 5.5 or Fable 5.2, OpenAI `gpt-6-astra`, Google Gemini 4 Argon. Never use Sonnet, Haiku, Gemini Flash, or the other GPT-6 models, not even for checkers or fan-out workers; their quality is not good enough. Cut cost with lower effort instead.
+- Models are fixed per vendor: Claude Opus 5.5 or Fable 5.2, OpenAI `gpt-6-astra`, Google Gemini 4 Carbon (`gemini-4-carbon`). Never use Sonnet, Haiku, Gemini 4 Argon, Gemini Flash, or the other GPT-6 models, not even for checkers or fan-out workers; cut cost with lower effort instead.
 - Lower effort before switching models: `effort` (Claude), `model_reasoning_effort` (Codex), and the thinking level (Antigravity) control depth and cost.
 - Cap runaway loops: `maxTurns` / `max_turns` and `maxBudgetUsd` (Claude, which also covers subagent spend), `BudgetConfig` limits on model calls, tool calls, and tokens (Antigravity, reported through `stop_reason`). Codex has no turn cap in the SDK; bound it in your own loop.
 - Track cost per Agent: `total_cost_usd` on the Claude result message, token `usage` on Codex turns, token usage on Antigravity responses (no USD). Log per-Agent totals to find the most expensive step.
@@ -396,8 +397,8 @@ All three are full agent runtimes. The choice depends on the model you want, the
 
 | Dimension | Claude (Anthropic) | OpenAI | Google |
 |-----------|-------------------|--------|--------|
-| **Models to use** | Opus 5.5 (`claude-opus-5-5`) or Fable 5.2 (`claude-fable-5-2`) only | `gpt-6-astra` only | Gemini 4 Argon only |
-| **Depth control** | `effort` (`low`–`max`), thinking always on. API default is `medium` on Opus 5.5 and `high` on Fable 5.2, so set it explicitly | `model_reasoning_effort` (`low`–`ultra`) | Thinking level |
+| **Models to use** | Opus 5.5 (`claude-opus-5-5`) or Fable 5.2 (`claude-fable-5-2`) only | `gpt-6-astra` only | Gemini 4 Carbon (`gemini-4-carbon`) only |
+| **Depth control** | `effort` (`low`–`max`), thinking always on. API default is `medium` on Opus 5.5 and `high` on Fable 5.2, so set it explicitly | `model_reasoning_effort` (`low`–`ultra`) | Thinking level (`low`, `medium`, `high`; API default is `medium`, so set it explicitly) |
 | **Cost control** | Lower `effort`; Opus 5.5 as the default, Fable 5.2 for the hardest reasoning, planning, and long unattended runs | Lower effort | Lower thinking level |
 
 Assign each Agent in the system to the model that fits its role:
@@ -405,11 +406,11 @@ Assign each Agent in the system to the model that fits its role:
 | Agent role | Model | Why |
 |---|---|---|
 | Solves math or algorithm problems, writes proofs or complexity-critical code from a complete specification | `gpt-6-astra` (Codex SDK) | Rigorous, careful solutions when the problem is fully defined. Have an upstream Agent (or your code) produce the full statement first: inputs, constraints, objective, edge cases, what must be proved |
-| Writes prose people will read: docs, reports, copy, Chinese text; rewrites and translates | Gemini 4 Argon (Antigravity SDK) | Natural, human-sounding writing |
+| Writes prose that people will read (docs, reports, copy, Chinese text; rewriting and translation); also security and vulnerability audits, open-ended research, and independent reviews of complex architecture or code | Gemini 4 Carbon (Antigravity SDK) | Natural, human-sounding writing; Carbon also explores hypotheses deeply and checks its own work against edge cases, which suits vulnerability audits, open-ended research, and design or code review |
 | Implements and debugs in a real repository, reviews code, runs long unattended, or handles loosely specified work that needs judgment; reads charts and screenshots; builds frontend UI | Claude Opus 5.5 (Claude Agent SDK) | Strong at end-to-end agentic coding and review in large codebases, catches details that don't add up, reports plainly what it did and what remains |
 | Orchestrator / Checker | Claude Fable 5.2 or Opus 5.5, or the allowed model of the SDK you use | Judgment over other Agents' output; a Checker should not be weaker than the Agent it checks. Anthropic reports good results with Fable 5.2 as planner and orchestrator for other models |
 | High-volume, mechanical workers | The same models at low effort | Smaller models are not used; lowering effort is the cost lever |
 
-Never assign an Agent, a subagent, or a Checker to any other model: not Claude Sonnet or Haiku, not Gemini Flash (the Antigravity SDK default, so always set `model` explicitly), and not the other GPT-6 models (`gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`). Pin subagent models too: `agents.default_subagent_model` (Codex), the `model` field of each `AgentDefinition` (Claude), `SubagentConfig.model` (Antigravity). All three SDKs set the model per Agent, so one system can mix vendors, for example Astra for the algorithm core, Claude for integration and review, Argon for the documentation.
+Never assign an Agent, a subagent, or a Checker to any other model: not Claude Sonnet or Haiku, not Gemini 4 Argon or Gemini Flash (Flash is the Antigravity SDK default, so always set `model` explicitly), and not the other GPT-6 models (`gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-luna`). Pin subagent models too: `agents.default_subagent_model` (Codex), the `model` field of each `AgentDefinition` (Claude), `SubagentConfig.model` (Antigravity). All three SDKs set the model per Agent, so one system can mix vendors, for example Astra for the algorithm core, Claude for integration, Carbon for a security audit and the documentation.
 
 After choosing an SDK, refer to the corresponding reference doc for specific API usage.

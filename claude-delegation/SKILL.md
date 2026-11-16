@@ -1,6 +1,6 @@
 ---
 name: claude-delegation
-description: Submit coding, debugging, code review, repository investigation, and analysis tasks to Claude Code (`claude -p`, Claude Opus by default) from Antigravity or Codex. Use when the user asks for Claude or Claude Code; for multi-step changes in a real repository, debugging, code review, long unattended runs, loosely specified tasks that need judgment, charts or screenshots, or frontend UI; when a second model's implementation or review is wanted; or for a bounded task worth offloading to the Claude subscription. Covers permissions, model and effort, long runs, session continuation, and verification.
+description: Submit a task to Claude Code (`claude -p`, Claude Opus by default) from Antigravity or Codex. Use only when the user explicitly asks for it: they name Claude or Claude Code, invoke this skill, ask to delegate the task to another agent, or ask to check Claude Code's setup. Never use it on your own judgment that a task (repository changes, debugging, code review, a long run, frontend UI, a second opinion) would suit Claude or is worth offloading; without an explicit request, do the work yourself. Covers permissions, model and effort, long runs, session continuation, and verification.
 compatibility: Antigravity or Codex with a shell tool, jq, and an authenticated Claude Code CLI on PATH.
 license: MIT
 metadata:
@@ -13,6 +13,12 @@ metadata:
 Call Claude Code in print mode from the terminal. Claude Code supplies its own system prompt, tools, subagents, and project instructions (CLAUDE.md); this skill decides what to send, with which permissions, and how to verify the result. Run the command in the task workspace: Claude Code treats the current directory as its workspace, and `--add-dir <dir>` adds more.
 
 Follow the user's request and explicit constraints over this skill's defaults.
+
+## Only on explicit request
+
+Use this skill only when the user's own message asks for it: they name Claude or Claude Code, invoke this skill by name, or tell you to delegate the task to another agent. Nothing else is a request. A task that matches the routing table or the fits listed below is not a request, and neither is a task that is long, tedious, or hard. Without a request, do the work yourself.
+
+A request covers the task that it names. A later task in the same session needs its own request, unless the user gave a standing instruction such as "send all reviews to another agent".
 
 ## No delegation chains
 
@@ -44,15 +50,15 @@ Running the command may need approval from your own sandbox; see Host notes.
 
 ## Choose the agent
 
-The same routing table appears in all three delegation skills. Keep the parts the host itself does best, and send the rest:
+The same routing table appears in all three delegation skills. It applies only after the user has asked for delegation. If the user named the agent, use that agent. If the user asked to delegate without naming one, pick with this table:
 
 | Task | Send to | Why |
 |---|---|---|
 | Math, algorithms, proofs, complexity-critical code, once the problem is fully defined | Codex (`gpt-6-astra`) | Rigorous, careful derivations and solutions. Quality depends on the problem statement: before sending, write down inputs, constraints, objective, edge cases, and what must be proved or measured |
-| Prose that people read: docs, articles, release notes, emails, UI copy, Chinese text; rewriting and translation | Antigravity (Gemini 4 Argon) | Natural, human-sounding writing. Also suits high-volume batches, since the subscription quota is generous |
+| Prose that people read: docs, articles, release notes, emails, UI copy, Chinese text; rewriting and translation. Also security and vulnerability audits, open-ended research, and a second opinion on complex architecture or code | Antigravity (Gemini 4 Carbon) | Natural, human-sounding writing; Carbon also explores hypotheses deeply and checks its own work against edge cases, which suits vulnerability audits, open-ended research, and independent reviews of architecture or code. Also suits high-volume batches at lower effort, since the subscription quota is generous |
 | Multi-step changes in a real repository carried through to passing checks; debugging; code review; long unattended runs; loosely specified tasks that need judgment; charts, screenshots, and frontend UI | Claude (Opus 5.5 or Fable 5.2) | Strong at end-to-end agentic coding and review in large codebases, at catching details that don't add up, and at reporting plainly what it did and what is still open |
 
-Split mixed tasks along these lines, for example: Codex designs and proves the algorithm, Claude integrates it into the codebase, Antigravity writes the user-facing docs. Do not send prose to Codex, and do not send under-specified math to anyone; define the problem first.
+Split mixed tasks along these lines, for example: Codex designs and proves the algorithm, Claude integrates it into the codebase, Antigravity audits the security boundary or writes the user-facing docs. Do not send prose to Codex, and do not send under-specified math to anyone; define the problem first.
 
 ## Decide what to submit
 

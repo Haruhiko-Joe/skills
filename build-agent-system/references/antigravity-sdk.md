@@ -2,13 +2,13 @@
 
 Google Antigravity SDK (`google-antigravity`) drives Antigravity agents from Python: the agent loop, built-in file/shell/web tools, policies, hooks, subagents, workflows, and persisted conversations. Each `Agent` runs a bundled `localharness` binary as a subprocess and talks to it over a local WebSocket.
 
-> Checked on 2026-11-10 against `google-antigravity` 0.1.23 (PyPI, wheels uploaded 2026-10-28; CHANGELOG entry 2026-10-26), the `main` branch of github.com/google-antigravity/antigravity-sdk-python (README, examples, `skills/google-antigravity-sdk/`, source), antigravity.google/docs/sdk, and the `agy` CLI 1.5.3. Package status: Alpha (`Development Status :: 3 - Alpha`). Python only.
+> Checked on 2026-11-11 against `google-antigravity` 0.1.23 (PyPI, wheels uploaded 2026-10-28; CHANGELOG entry 2026-10-26), the `main` branch of github.com/google-antigravity/antigravity-sdk-python (README, examples, `skills/google-antigravity-sdk/`, source), antigravity.google/docs/sdk, the Gemini 4 Carbon API docs, and the `agy` CLI 1.5.5. Package status: Alpha (`Development Status :: 3 - Alpha`). Python only.
 
 | | Antigravity SDK (Python) |
 |---|---|
 | Runtime | `localharness` binary shipped in the platform wheel, one subprocess per `Agent` |
 | Auth | `GEMINI_API_KEY` (or `api_key=`), or Vertex / Gemini Enterprise (`vertex=True`). No Antigravity app/CLI sign-in |
-| Default model | `gemini-3.8-flash` (the Antigravity app and CLI default to Gemini 4 Argon; the SDK does not) |
+| Default model | `gemini-3.8-flash` (the Antigravity app and CLI offer Gemini 4 Carbon; the SDK still defaults to Flash, so set `model="gemini-4-carbon"` explicitly) |
 | Start / resume conversation | Yes: `conversation_id` + the same `save_dir` |
 | Fork conversation | No |
 | Structured output | `response_schema=` (JSON Schema dict/str or Pydantic class), returned through the `finish` tool |
@@ -232,22 +232,22 @@ from google.antigravity import (
 
 config = LocalAgentConfig(
     model=ModelTarget(
-        name="gemini-4-argon",
+        name="gemini-4-carbon",
         endpoint=GeminiAPIEndpoint(                    # api_key falls back to GEMINI_API_KEY
             options=GeminiModelOptions(
                 thinking_level=ThinkingLevel.HIGH,
                 service_tier=ServiceTier.STANDARD,     # PRIORITY / FLEX also exist
-                max_output_tokens=100_000,             # per-step output cap (0.1.22+)
+                max_output_tokens=65_536,              # synchronous limit; caps thinking + answer together (0.1.22+)
             ),
         ),
     ),
 )
-# Shorthand when no options are needed: LocalAgentConfig(model="gemini-4-argon")
+# Shorthand when no options are needed: LocalAgentConfig(model="gemini-4-carbon")
 ```
 
-- SDK default text model: `gemini-3.8-flash`. This skill uses Gemini 4 Argon only, so always set the model explicitly, for the Agent and every `SubagentConfig`; default image model: `gemini-3.1-flash-lite-image` (`DEFAULT_MODEL`, `DEFAULT_IMAGE_GENERATION_MODEL` in `google.antigravity.models`). An explicit text model keeps the default image model unless `models=` lists an IMAGE target.
-- Gemini 4 Argon: the Gemini API model page lists model code `gemini-4-argon` (stable, 1,048,576-token context, thinking low/medium/high). The SDK repo does not mention Argon and its own guide says not to guess model IDs, so verify the ID against your key before relying on it. The `agy models` IDs (`gemini-4-argon-high`, `gemini-3.8-flash-medium`, ...) are CLI aliases with effort baked in, not Gemini API IDs.
-- `ThinkingLevel`: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH`, `EXTRA_HIGH`. Supported levels depend on the model (Argon: low/medium/high per the Gemini API page). There is no per-turn model or thinking switch on `Agent.chat`; build a new `Agent` to change them.
+- SDK default text model: `gemini-3.8-flash`. This skill uses Gemini 4 Carbon (`gemini-4-carbon`) only, so always set the model explicitly, for the Agent and every `SubagentConfig`; default image model: `gemini-3.1-flash-lite-image` (`DEFAULT_MODEL`, `DEFAULT_IMAGE_GENERATION_MODEL` in `google.antigravity.models`). An explicit text model keeps the default image model unless `models=` lists an IMAGE target.
+- Gemini 4 Carbon: the model page on Google AI Studio lists model code `gemini-4-carbon` (stable, unified context window of 1,048,576 tokens for input and output, long decode up to 1M tokens, thinking `low`/`medium`/`high` with `medium` as default; paid tier only). Because `max_output_tokens` caps thinking plus answer tokens together, keep it generous (at least 32,768; 65,536 is the synchronous limit). The `agy models` IDs (`gemini-4-carbon-high`, `gemini-4-argon-high`, `gemini-3.8-flash-medium`, ...) are CLI aliases with effort baked in, not Gemini API IDs.
+- `ThinkingLevel`: `MINIMAL`, `LOW`, `MEDIUM`, `HIGH`, `EXTRA_HIGH`. Supported levels depend on the model (Carbon supports `LOW`, `MEDIUM`, `HIGH`; `MINIMAL` is rejected on Carbon). There is no per-turn model or thinking switch on `Agent.chat`; build a new `Agent` to change them.
 - Vertex: `endpoint=VertexEndpoint(project=..., location=..., options=GeminiModelOptions(...))` (`project`/`location` and `api_key` are mutually exclusive).
 - `SubagentConfig.model` takes a name only; subagents run against the agent-level endpoint.
 - `capabilities.agent_behavior`: `AUTONOMOUS` (default; finishes without asking), `INTERACTIVE` (asks questions, planning; needed for `ask_question`), `MINIMAL` (trimmed prompt for small models).
@@ -452,6 +452,7 @@ fact_checker = types.SubagentConfig(
     capabilities=types.SubagentCapabilities(
         enabled_tools=[types.BuiltinTools.VIEW_FILE, types.BuiltinTools.FIND_FILE],
     ),
+    model="gemini-4-carbon",
 )
 lead = types.SubagentConfig(
     name="lead_researcher",
@@ -460,9 +461,10 @@ lead = types.SubagentConfig(
         enabled_tools=[types.BuiltinTools.VIEW_FILE, types.BuiltinTools.INVOKE_SUBAGENT],
         allowed_subagents=["fact_checker"],
     ),
-    model="gemini-4-argon",
+    model="gemini-4-carbon",
 )
 config = LocalAgentConfig(
+    model="gemini-4-carbon",
     subagents=[lead, fact_checker],
     capabilities=types.CapabilitiesConfig(max_subagent_depth=3, allowed_subagents=["lead_researcher"]),
 )
@@ -680,7 +682,7 @@ class MyAgent:
     def __init__(
         self,
         save_dir: str,
-        model: str = "gemini-4-argon",
+        model: str = "gemini-4-carbon",
         thinking_level: ThinkingLevel = ThinkingLevel.HIGH,
         system_instructions: str | None = None,
         allow_writes: bool = False,
@@ -781,4 +783,4 @@ Antigravity SDK specifics:
 - **Background and long-running work**: triggers (`every`, `on_file_change`, `@trigger`) and the `schedule` tool keep a live session working; `RunCommandConfig(enable_daemons=True)` for servers. All of it stops with the Python process; nothing runs detached.
 - **Permissions for unattended runs**: set `capabilities` explicitly (the `LocalAgentConfig` default exposes write tools). Read-only: `enabled_tools=[...]`. Writers: `[policy.workspace_only(...), policy.allow_all()]` plus `RunCommandConfig(enable_sandbox=True)`. Avoid `ask_user` policies and `ask_question` when no human is present; keep `AgentBehavior.AUTONOMOUS`.
 - **Limits**: set `BudgetConfig` on every unattended agent and check `response.stop_reason`; usage is in tokens only.
-- **CLI alternative**: `agy -p` (CLI 1.5.3) runs the same agent with Antigravity sign-in, Gemini 4 Argon by default, `--json-schema`, `--conversation <id>`, `--model`, `--effort`, `--output-format json`. Use it when you want the subscription and CLI settings rather than an API key; see the repo's `agy-delegation` skill.
+- **CLI alternative**: `agy -p` (CLI 1.5.5) runs the same agent with Antigravity sign-in, `--model gemini-4-carbon --effort high`, `--disable-slash-commands`, `--json-schema`, `--conversation <id>`, `--output-format stream-json`. Use it when you want the subscription and CLI settings rather than an API key; see the repo's `agy-delegation` skill.
